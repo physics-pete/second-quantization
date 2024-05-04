@@ -1,9 +1,15 @@
 from abc import ABC
-from typing import List, Tuple
+from typing import List, Union
 from dataclasses import dataclass
 from enum import Enum
 import functools 
 import operator
+
+DEBUG = False
+
+def debug(*args, **kwargs):
+    if DEBUG:
+        print(*args, **kwargs)
 
 class Terminal:
     BOLD = '\033[1m'
@@ -15,27 +21,52 @@ class LeadingSign(Enum):
     POSITIVE = ""
     NEGATIVE = "-"
 
+    def __mul__(self, other) -> 'LeadingSign':
+        if f'{self.value}{other.value}'== '-':
+            return LeadingSign.NEGATIVE
+        return LeadingSign.POSITIVE
+    
+    def __neg__(self) -> 'LeadingSign':
+        if self == LeadingSign.POSITIVE:
+            return LeadingSign.NEGATIVE
+        return LeadingSign.POSITIVE
+
 class Expression(ABC):
     leading_sign = LeadingSign.POSITIVE
 
     def __add__(self, other: 'Expression') -> 'Expression':
         return Addition(self, other)
     
+    def __sub__(self, other: 'Expression') -> 'Expression':
+        other.leading_sign = LeadingSign.NEGATIVE * other.leading_sign
+        return Addition(self, other)
+    
     def __mul__(self, other: 'Expression') -> 'Expression':
         return Multiplication(self, other)
 
 class Symbol(Expression):
-
-    def __init__(self, name: str):
+    def __init__(self, name: str, leading_sign: LeadingSign = LeadingSign.POSITIVE):
         self.name = name
+        self.leading_sign = leading_sign
+
+    @property
+    def negative(self):
+        if self.leading_sign == LeadingSign.NEGATIVE:
+            return Symbol(self.name, LeadingSign.POSITIVE)
+        return  Symbol(self.name, LeadingSign.NEGATIVE)
 
     def __repr__(self) -> str:
-        return self.name
+        return f'{self.leading_sign.value}{self.name}'
     
     def __eq__(self, other) -> bool:
-        return isinstance(other, Symbol) and (self.name == other.name)
+        return (
+            isinstance(other, Symbol) 
+            and (self.name == other.name) 
+        )
 
 ZERO = Symbol('0')
+ONE = Symbol('1')
+I = Symbol('ⅈ')
 
 class Addition(Expression):
     def __init__(self, lhs: Expression, rhs: Expression):
@@ -52,7 +83,7 @@ class Multiplication(Expression):
         self.rhs = rhs
 
     def __repr__(self) -> str:
-        return f"{repr(self.lhs)}⋅{repr(self.rhs)}"
+        return f"[{repr(self.lhs)}⋅{repr(self.rhs)}]"
 
 
 class Operator(Expression):
@@ -127,13 +158,17 @@ class Ket(Expression):
     def order(self):
         raise NotImplemented('order for Ket not implemented')
 
+    def dagger(self) -> 'Bra':
+        raise NotImplemented('dagger for Ket not implemented')
+
     def __eq__(self, rhs):
         return (
-            isinstance(rhs, Ket)
+            (isinstance(rhs, Ket) or isinstance(rhs, Bra))
             and (len(self.state) == len(rhs.state))
             and functools.reduce(
                 operator.and_, 
-                [l == r for l, r in zip(self.state, rhs.state)]
+                [l == r for l, r in zip(self.state, rhs.state)],
+                True
                 )
         )
             
@@ -147,16 +182,42 @@ class Bra(Expression):
 
     def __repr__(self) -> str:
         return f'{Terminal.CYAN}⟨{", ".join([repr(s) for s in self.state])}|{Terminal.NORM}'
+    
+    def dagger(self) -> Ket:
+        raise NotImplemented('dagger for Bra not implemented')
+    
+    def inner(self, rhs) -> Symbol:
+        raise NotImplementedError('inner product is not implemented')
+
+    def __eq__(self, rhs: Expression) -> bool:
+        return (
+            (isinstance(rhs, Ket) or isinstance(rhs, Bra))
+            and (len(self.state) == len(rhs.state))
+            and functools.reduce(
+                operator.and_, 
+                [l == r for l, r in zip(self.state, rhs.state)]
+                )
+        )
 
 class FermionKet(Ket):
-    def __init__(self, *state: List[Symbol]) -> 'FermionKet':
-        super().__init__(*[Occupation(s) for s in state])
+    def __init__(self, 
+                 *state: List[Union[Symbol, Occupation]], 
+                 leading_sign: LeadingSign = LeadingSign.POSITIVE
+                 ) -> 'FermionKet':
+        super().__init__(*[Occupation(s) if isinstance(s, Symbol) else s for s in state])
+        self.leading_sign = leading_sign
+
+    def __neg__(self) -> 'FermionKet':
+        return FermionKet(*list(self.state).copy(), leading_sign=-self.leading_sign)
+
+    def dagger(self) -> 'FermionBra':
+        return FermionBra(*list(self.state).copy(), leading_sign=self.leading_sign)
 
     def create(self, symbol: Symbol) -> Expression:
         result = [o for o in self.state if o.symbol == symbol]
 
         if len(result) == 0:
-            new_ket = FermionKet(symbol, *[o.symbol for o in self.state])
+            new_ket = FermionKet(symbol, *[o.symbol for o in self.state]).order()
             new_ket.leading_sign = self.leading_sign
             return new_ket
         
@@ -206,12 +267,48 @@ class FermionKet(Ket):
 
         return new_fermion_ket
 
-
-
-
 class FermionBra(Bra):
-    def __init__(self, *state: List[Symbol]):
-        super().__init__(*[Occupation(s) for s in state])
+    def __init__(self, *state: List[Union[Symbol, Occupation]], leading_sign: LeadingSign = LeadingSign.POSITIVE):
+        super().__init__(*[Occupation(s) if isinstance(s, Symbol) else s for s in state])
+        self.leading_sign = leading_sign
+
+    def dagger(self) -> FermionKet:
+        return FermionKet(*list(self.state).copy(), leading_sign=self.leading_sign)
+
+    def inner(self, rhs: FermionKet) -> Symbol:
+        ordered_bra = self.order()
+        ordered_ket = rhs.order()
+
+        if ordered_bra == ordered_ket:
+            result = ONE
+            result.leading_sign = ordered_bra.leading_sign * ordered_ket.leading_sign
+            return result
+        
+        return ZERO
+
+    def order(self) -> 'FermionBra':
+        if len(self.state) <= 1:
+            return self
+
+        result = self.state
+        commutations = 0
+
+        for i in range(len(self.state)):
+            minimum = min(result[i:], key=lambda o: o.symbol.name)
+            index_minimum = result.index(minimum, i)
+            commutations += index_minimum - i
+
+            left = list(result[:i])
+            right = [r for r in result[i:] if r != minimum]
+            result = left + [minimum] + right
+
+
+        commutations += 0 if self.leading_sign == LeadingSign.POSITIVE else 1
+
+        new_fermion_bra = FermionBra(*[r.symbol for r in result])
+        new_fermion_bra.leading_sign = LeadingSign.POSITIVE if commutations % 2 == 0 else LeadingSign.NEGATIVE
+
+        return new_fermion_bra
 
 # shorthand notation
 F =  FermionAnnihilationOperator
@@ -262,10 +359,26 @@ def simplify_multiplication(multiplication: Multiplication) -> Expression:
     lhs = multiplication.lhs
     rhs = multiplication.rhs
 
-    if isinstance(lhs, Operator) and isinstance(rhs, Ket):
-        return lhs.apply(rhs)
     if (lhs == ZERO) or (rhs == ZERO):
         return ZERO
+    elif lhs == ONE:
+        rhs.leading_sign = lhs.leading_sign * rhs.leading_sign
+        return rhs
+    elif rhs == ONE:
+        lhs.leading_sign = lhs.leading_sign * rhs.leading_sign
+        return lhs
+    elif isinstance(lhs, Operator) and isinstance(rhs, Ket):
+        return lhs.apply(rhs)
+    elif isinstance(lhs, Bra) and isinstance(rhs, Ket):
+        return lhs.inner(rhs)
+    elif (
+        isinstance(lhs, Bra) 
+        and isinstance(rhs, Multiplication) 
+        and isinstance(rhs.lhs, Symbol) 
+        and isinstance(rhs.rhs, Ket)
+        ):
+        return Multiplication(rhs.lhs, lhs.inner(rhs.rhs))
+
     
     return Multiplication(simplify(lhs), simplify(rhs))
 
@@ -276,6 +389,8 @@ def simplify_addition(addition: Addition) -> Expression:
         return simplify(addition.lhs)
     
     return Addition(simplify(addition.lhs), simplify(addition.rhs))
+
+
 def simplify(expression: Expression) -> Expression:
     
     if isinstance(expression, Addition):
@@ -291,6 +406,7 @@ def full_simplify(expression: Expression) -> Expression:
     old_representation = ""
     while repr(expression) != old_representation:
         old_representation = repr(expression)
+        debug(old_representation, end='\n\n')
         expression = simplify(expression)
 
     return expression
@@ -320,37 +436,7 @@ def full_summarize(expression: Expression) -> Expression:
 
     return expression
 
-if __name__ == '__main__':
-    ou = Symbol('1↑')
-    od = Symbol('1↓')
-    tu = Symbol('2↑')
-    td = Symbol('2↓')
 
-    e1 = Symbol('E1')
-    e2 = Symbol('E2')
-    j = Symbol('J')
-
-    H1 = e1 * (Fd(ou) * F(ou) + Fd(od) * F(od))
-    H2 = e2 * (Fd(tu) * F(tu) + Fd(td) * F(td))
-    WW = j * (Fd(ou) * F(ou) + Fd(ou) * F(tu) + Fd(tu) * F(ou) + Fd(tu) * F(tu))
-
-    H = H1 + H2 + WW
-    
-    states_to_test = [
-        FermionKet(ou, od),
-        FermionKet(ou, tu),
-        FermionKet(ou, td),
-        FermionKet(od, tu),
-        FermionKet(od, td),
-        FermionKet(tu, td),
-    ]
-
-    for state in states_to_test:
-        print(f"H{state} = ", end='')
-        new_state = full_simplify(full_expand(H * state))
-        print(new_state)
-        #summerized = full_summarize(new_state)
-        #print(summerized)
 
 
 
