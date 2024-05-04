@@ -38,52 +38,127 @@ class Expression(ABC):
         return Addition(self, other)
     
     def __sub__(self, other: 'Expression') -> 'Expression':
-        other.leading_sign = LeadingSign.NEGATIVE * other.leading_sign
-        return Addition(self, other)
+        return Addition(self, -other)
     
     def __mul__(self, other: 'Expression') -> 'Expression':
         return Multiplication(self, other)
+    
+    def copy_without_sign(self) -> 'Expression':
+        return self
 
 class Symbol(Expression):
     def __init__(self, name: str, leading_sign: LeadingSign = LeadingSign.POSITIVE):
         self.name = name
         self.leading_sign = leading_sign
 
-    @property
-    def negative(self):
-        if self.leading_sign == LeadingSign.NEGATIVE:
-            return Symbol(self.name, LeadingSign.POSITIVE)
-        return  Symbol(self.name, LeadingSign.NEGATIVE)
-
     def __repr__(self) -> str:
         return f'{self.leading_sign.value}{self.name}'
     
+    def __neg__(self) -> 'Symbol':
+        return Symbol(self.name, leading_sign=-self.leading_sign)
+
     def __eq__(self, other) -> bool:
         return (
             isinstance(other, Symbol) 
             and (self.name == other.name) 
+            and (self.leading_sign == other.leading_sign)
         )
+    
+    def copy_without_sign(self) -> 'Symbol':
+        return Symbol(self.name)
 
-ZERO = Symbol('0')
-ONE = Symbol('1')
-I = Symbol('ⅈ')
+class Integer(Symbol):
+    def __init__(self, number: int, leading_sign: LeadingSign = LeadingSign.POSITIVE):
+        self.number = number
+        self.leading_sign = leading_sign
+
+    def copy_without_sign(self) -> 'Integer':
+        return Integer(self.number)
+
+    @property
+    def name(self):
+        return str(self.number)
+    
+    @property
+    def value(self) -> int:
+        return self.number if self.leading_sign == LeadingSign.POSITIVE else -self.number
+    
+    def __add__(self, other: Expression) -> Expression:
+        if isinstance(other, Integer):
+            result = self.value + other.value
+            return Integer(abs(result), LeadingSign.POSITIVE if result >= 0 else LeadingSign.NEGATIVE)
+        
+        return super().__add__(other)
+    
+    def __sub__(self, other: Expression) -> Expression:
+        if isinstance(other, Integer):
+            result = self.value - other.value
+            return Integer(abs(result), LeadingSign.POSITIVE if result >= 0 else LeadingSign.NEGATIVE)
+        
+        return super().__sub__(other)
+    
+    def __mul__(self, other: Expression) -> Expression:
+        if isinstance(other, Integer):
+            result = self.value * other.value
+            return Integer(abs(result), LeadingSign.POSITIVE if result >= 0 else LeadingSign.NEGATIVE)
+        
+        return super().__mul__(other)
+    
+    def __neg__(self) -> 'Integer':
+        return Integer(self.number, -self.leading_sign)
+    
+    def __eq__(self, other) -> bool:
+        return (isinstance(other, Integer)
+                and self.value == other.value
+                and self.leading_sign == other.leading_sign)
+
+class Special:
+    def ZERO():
+        return Integer(0)
+
+    def ONE():
+        return Integer(1)
 
 class Addition(Expression):
     def __init__(self, lhs: Expression, rhs: Expression):
-        self.lhs = lhs
-        self.rhs = rhs
-        self.complex_expression = True
+        self.lhs = lhs.copy_without_sign()
+        self.rhs = rhs.copy_without_sign()
+
+        if (
+            lhs.leading_sign == LeadingSign.NEGATIVE 
+            and rhs.leading_sign == LeadingSign.NEGATIVE
+        ):
+            self.leading_sign = LeadingSign.NEGATIVE
+        elif (
+            lhs.leading_sign == LeadingSign.NEGATIVE 
+            and rhs.leading_sign == LeadingSign.POSITIVE
+        ):
+            self.leading_sign = LeadingSign.NEGATIVE
+            rhs.leading_sign = LeadingSign.POSITIVE
+        elif (
+            lhs.leading_sign == LeadingSign.POSITIVE 
+            and rhs.leading_sign == LeadingSign.NEGATIVE
+        ):
+            self.rhs.leading_sign = LeadingSign.NEGATIVE
+
 
     def __repr__(self) -> str:
         return f"({repr(self.lhs)} + {repr(self.rhs)})"
     
 class Multiplication(Expression):
     def __init__(self, lhs: Expression, rhs: Expression):
-        self.lhs = lhs
-        self.rhs = rhs
+        leading_sign = LeadingSign.POSITIVE
+        self.lhs = lhs.copy_without_sign()
+        self.rhs = rhs.copy_without_sign()
+
+        if lhs.leading_sign == LeadingSign.NEGATIVE:
+            leading_sign = -leading_sign
+
+        if rhs.leading_sign == LeadingSign.NEGATIVE:
+            leading_sign = -leading_sign
 
     def __repr__(self) -> str:
-        return f"[{repr(self.lhs)}⋅{repr(self.rhs)}]"
+        return f"{self.leading_sign.value}[{repr(self.lhs)}⋅{repr(self.rhs)}]"
 
 
 class Operator(Expression):
@@ -221,13 +296,13 @@ class FermionKet(Ket):
             new_ket.leading_sign = self.leading_sign
             return new_ket
         
-        return ZERO
+        return Special.ZERO()
     
     def destroy(self, symbol: Symbol) -> Expression:
         result = [index for index, o in enumerate(self.state) if o.symbol == symbol]
 
         if len(result) == 0:
-            return ZERO
+            return Special.ZERO()
         
         if len(result) > 1:
             raise ValueError(f'Fermion Ket should not have more than one state {symbol}')
@@ -280,11 +355,11 @@ class FermionBra(Bra):
         ordered_ket = rhs.order()
 
         if ordered_bra == ordered_ket:
-            result = ONE
+            result = Special.ONE()
             result.leading_sign = ordered_bra.leading_sign * ordered_ket.leading_sign
             return result
         
-        return ZERO
+        return Special.ZERO()
 
     def order(self) -> 'FermionBra':
         if len(self.state) <= 1:
@@ -359,12 +434,12 @@ def simplify_multiplication(multiplication: Multiplication) -> Expression:
     lhs = multiplication.lhs
     rhs = multiplication.rhs
 
-    if (lhs == ZERO) or (rhs == ZERO):
-        return ZERO
-    elif lhs == ONE:
+    if (lhs == Special.ZERO()) or (rhs == Special.ZERO()):
+        return Special.ZERO()
+    elif lhs == Special.ONE():
         rhs.leading_sign = lhs.leading_sign * rhs.leading_sign
         return rhs
-    elif rhs == ONE:
+    elif rhs == Special.ONE():
         lhs.leading_sign = lhs.leading_sign * rhs.leading_sign
         return lhs
     elif isinstance(lhs, Operator) and isinstance(rhs, Ket):
@@ -383,9 +458,9 @@ def simplify_multiplication(multiplication: Multiplication) -> Expression:
     return Multiplication(simplify(lhs), simplify(rhs))
 
 def simplify_addition(addition: Addition) -> Expression:
-    if addition.lhs == ZERO:
+    if addition.lhs == Special.ZERO():
         return simplify(addition.rhs)
-    elif addition.rhs == ZERO:
+    elif addition.rhs == Special.ZERO():
         return simplify(addition.lhs)
     
     return Addition(simplify(addition.lhs), simplify(addition.rhs))
@@ -416,8 +491,20 @@ def summarize_addition(addition: Addition) -> Expression:
     rhs = addition.rhs
 
     if isinstance(lhs, Multiplication) and isinstance(rhs, Multiplication):
-        if isinstance(lhs.rhs, Ket) and lhs.rhs == rhs.rhs:
-            return Multiplication(Addition(summarize(lhs.lhs), summarize(rhs.lhs)), rhs.rhs)
+        if lhs.lhs == rhs.lhs:
+            return lhs.lhs * (lhs.rhs + rhs.rhs)
+        elif lhs.rhs == rhs.rhs:
+            return (lhs.lhs + rhs.lhs) * rhs.rhs
+    elif isinstance(lhs, Symbol) and isinstance(rhs, Symbol):
+        if lhs == rhs:
+            return Integer(2) * rhs
+        elif lhs.name == rhs.name:
+            return Special.ZERO()
+    elif isinstance(lhs, Multiplication) and isinstance(rhs, Symbol):
+        if lhs.rhs == rhs:
+            return (lhs.lhs + Integer(1)) * rhs
+        elif lhs.rhs.name == rhs.name:
+            return (lhs.lhs - Integer(1)) * rhs
         
     return Addition(summarize(lhs), summarize(rhs))
 
