@@ -146,16 +146,22 @@ class Addition(Expression):
         return f"({repr(self.lhs)} + {repr(self.rhs)})"
     
 class Multiplication(Expression):
-    def __init__(self, lhs: Expression, rhs: Expression):
-        leading_sign = LeadingSign.POSITIVE
+    def __init__(self, lhs: Expression, rhs: Expression, leading_sign=LeadingSign.POSITIVE):
         self.lhs = lhs.copy_without_sign()
         self.rhs = rhs.copy_without_sign()
 
         if lhs.leading_sign == LeadingSign.NEGATIVE:
             leading_sign = -leading_sign
+            lhs.leading_sign = LeadingSign.POSITIVE
 
         if rhs.leading_sign == LeadingSign.NEGATIVE:
             leading_sign = -leading_sign
+            rhs.leading_sign = LeadingSign.POSITIVE
+
+        self.leading_sign = leading_sign
+
+    def __neg__(self) -> 'Multiplication':
+        return Multiplication(self.lhs, self.rhs, leading_sign=-self.leading_sign)
 
     def __repr__(self) -> str:
         return f"{self.leading_sign.value}[{repr(self.lhs)}⋅{repr(self.rhs)}]"
@@ -392,21 +398,38 @@ Fd = FermionicCreationOperator
 def expand_multiplication(multiplication: Multiplication) -> Expression:
     lhs = multiplication.lhs
     rhs = multiplication.rhs
+    sign = multiplication.leading_sign
 
     if isinstance(lhs, Addition): 
         # Rule: (a + b) * c -> a * c + b * c
-        return Addition(expand(lhs.lhs * rhs), expand(lhs.rhs * rhs))
+        return Addition(
+            expand(Multiplication(lhs.lhs, rhs, leading_sign=sign)), 
+            expand(Multiplication(lhs.rhs, rhs, leading_sign=sign))
+        )
     elif isinstance(rhs, Addition):
         # Rule: a * (b + c) -> a * b + a * c
-        return expand(Addition(expand(lhs * rhs.lhs), expand(lhs * rhs.rhs)))
+        return expand(
+            Addition(
+                expand(Multiplication(lhs, rhs.lhs, leading_sign=sign)), 
+                expand(Multiplication(lhs, rhs.rhs, leading_sign=sign))
+                )
+            )
     else:
         lhs = expand(lhs)
         rhs = expand(rhs)
 
         if isinstance(lhs, Multiplication): #root swap (a * b) * c -> a * (b * c)
-            return Multiplication(lhs.lhs, Multiplication(lhs.rhs, rhs))
-        else: 
-            return Multiplication(lhs, rhs)
+            return Multiplication(lhs.lhs, 
+                                  Multiplication(lhs.rhs, rhs, leading_sign=lhs.leading_sign), 
+                                  leading_sign=sign)
+        elif isinstance(lhs, Bra) and isinstance(rhs, Multiplication) and isinstance(rhs.lhs, Symbol):
+            return Multiplication(
+             rhs.lhs,
+             Multiplication(lhs, rhs.rhs, rhs.leading_sign),
+             leading_sign=sign 
+            )
+        
+    return Multiplication(lhs, rhs, leading_sign=sign)
     
 def expand_addition(addition: Addition) -> Expression:
     lhs = addition.lhs
@@ -426,6 +449,7 @@ def full_expand(expression: Expression) -> Expression:
     old_representation = ""
     while repr(expression) != old_representation:
         old_representation = repr(expression)
+        debug(old_representation, end='\n\n')
         expression = expand(expression)
 
     return expression
@@ -500,7 +524,7 @@ def summarize_addition(addition: Addition) -> Expression:
             return Integer(2) * rhs
         elif lhs.name == rhs.name:
             return Special.ZERO()
-    elif isinstance(lhs, Multiplication) and isinstance(rhs, Symbol):
+    elif isinstance(lhs, Multiplication) and isinstance(lhs.rhs, Symbol) and isinstance(rhs, Symbol):
         if lhs.rhs == rhs:
             return (lhs.lhs + Integer(1)) * rhs
         elif lhs.rhs.name == rhs.name:
