@@ -17,22 +17,22 @@ class Terminal:
     GREEN = '\033[92m'
     CYAN = '\033[96m'
 
-class LeadingSign(Enum):
+class Sign(Enum):
     POSITIVE = ""
     NEGATIVE = "-"
 
-    def __mul__(self, other) -> 'LeadingSign':
+    def __mul__(self, other) -> 'Sign':
         if f'{self.value}{other.value}'== '-':
-            return LeadingSign.NEGATIVE
-        return LeadingSign.POSITIVE
+            return Sign.NEGATIVE
+        return Sign.POSITIVE
     
-    def __neg__(self) -> 'LeadingSign':
-        if self == LeadingSign.POSITIVE:
-            return LeadingSign.NEGATIVE
-        return LeadingSign.POSITIVE
+    def __neg__(self) -> 'Sign':
+        if self == Sign.POSITIVE:
+            return Sign.NEGATIVE
+        return Sign.POSITIVE
 
 class Expression(ABC):
-    leading_sign = LeadingSign.POSITIVE
+    sign = Sign.POSITIVE
 
     def __add__(self, other: 'Expression') -> 'Expression':
         return Addition(self, other)
@@ -45,32 +45,38 @@ class Expression(ABC):
     
     def copy_without_sign(self) -> 'Expression':
         return self
+    
+    def expand(self) -> 'Expression':
+        return self
 
 class Symbol(Expression):
-    def __init__(self, name: str, leading_sign: LeadingSign = LeadingSign.POSITIVE):
+    def __init__(self, name: str, sign: Sign = Sign.POSITIVE):
         self.name = name
-        self.leading_sign = leading_sign
+        self.sign = sign
 
     def __repr__(self) -> str:
-        return f'{self.leading_sign.value}{self.name}'
+        return f'{self.sign.value}{self.name}'
     
     def __neg__(self) -> 'Symbol':
-        return Symbol(self.name, leading_sign=-self.leading_sign)
+        return Symbol(self.name, sign=-self.sign)
 
     def __eq__(self, other) -> bool:
         return (
             isinstance(other, Symbol) 
             and (self.name == other.name) 
-            and (self.leading_sign == other.leading_sign)
+            and (self.sign == other.sign)
         )
     
     def copy_without_sign(self) -> 'Symbol':
         return Symbol(self.name)
+    
+    def expand(self) -> 'Symbol':
+        return self
 
 class Integer(Symbol):
-    def __init__(self, number: int, leading_sign: LeadingSign = LeadingSign.POSITIVE):
+    def __init__(self, number: int, sign: Sign = Sign.POSITIVE):
         self.number = number
-        self.leading_sign = leading_sign
+        self.sign = sign
 
     def copy_without_sign(self) -> 'Integer':
         return Integer(self.number)
@@ -81,36 +87,39 @@ class Integer(Symbol):
     
     @property
     def value(self) -> int:
-        return self.number if self.leading_sign == LeadingSign.POSITIVE else -self.number
+        return self.number if self.sign == Sign.POSITIVE else -self.number
     
     def __add__(self, other: Expression) -> Expression:
         if isinstance(other, Integer):
             result = self.value + other.value
-            return Integer(abs(result), LeadingSign.POSITIVE if result >= 0 else LeadingSign.NEGATIVE)
+            return Integer(abs(result), Sign.POSITIVE if result >= 0 else Sign.NEGATIVE)
         
         return super().__add__(other)
     
     def __sub__(self, other: Expression) -> Expression:
         if isinstance(other, Integer):
             result = self.value - other.value
-            return Integer(abs(result), LeadingSign.POSITIVE if result >= 0 else LeadingSign.NEGATIVE)
+            return Integer(abs(result), Sign.POSITIVE if result >= 0 else Sign.NEGATIVE)
         
         return super().__sub__(other)
     
     def __mul__(self, other: Expression) -> Expression:
         if isinstance(other, Integer):
             result = self.value * other.value
-            return Integer(abs(result), LeadingSign.POSITIVE if result >= 0 else LeadingSign.NEGATIVE)
+            return Integer(abs(result), Sign.POSITIVE if result >= 0 else Sign.NEGATIVE)
         
         return super().__mul__(other)
     
     def __neg__(self) -> 'Integer':
-        return Integer(self.number, -self.leading_sign)
+        return Integer(self.number, -self.sign)
     
     def __eq__(self, other) -> bool:
         return (isinstance(other, Integer)
                 and self.value == other.value
-                and self.leading_sign == other.leading_sign)
+                and self.sign == other.sign)
+
+    def expand(self) -> 'Integer':
+        return self
 
 class Special:
     def ZERO():
@@ -120,52 +129,77 @@ class Special:
         return Integer(1)
 
 class Addition(Expression):
-    def __init__(self, lhs: Expression, rhs: Expression):
+    def __init__(self, lhs: Expression, rhs: Expression, sign: Sign = Sign.POSITIVE):
         self.lhs = lhs.copy_without_sign()
         self.rhs = rhs.copy_without_sign()
 
-        if (
-            lhs.leading_sign == LeadingSign.NEGATIVE 
-            and rhs.leading_sign == LeadingSign.NEGATIVE
-        ):
-            self.leading_sign = LeadingSign.NEGATIVE
-        elif (
-            lhs.leading_sign == LeadingSign.NEGATIVE 
-            and rhs.leading_sign == LeadingSign.POSITIVE
-        ):
-            self.leading_sign = LeadingSign.NEGATIVE
-            rhs.leading_sign = LeadingSign.POSITIVE
-        elif (
-            lhs.leading_sign == LeadingSign.POSITIVE 
-            and rhs.leading_sign == LeadingSign.NEGATIVE
-        ):
-            self.rhs.leading_sign = LeadingSign.NEGATIVE
-
+        if (lhs.sign == Sign.NEGATIVE and rhs.sign == Sign.NEGATIVE):
+            self.sign = Sign.NEGATIVE * sign
+        elif (lhs.sign == Sign.NEGATIVE and rhs.sign == Sign.POSITIVE):
+            self.sign = Sign.NEGATIVE * sign
+            rhs.sign = Sign.POSITIVE
+        elif (lhs.sign == Sign.POSITIVE and rhs.sign == Sign.NEGATIVE):
+            self.rhs.sign = Sign.NEGATIVE
+            self.sign = sign
+        else:
+            self.sign = sign
 
     def __repr__(self) -> str:
         return f"({repr(self.lhs)} + {repr(self.rhs)})"
     
+    def expand(self) -> 'Addition':
+        return Addition(self.lhs.expand(), self.rhs.expand(), self.sign)
+    
 class Multiplication(Expression):
-    def __init__(self, lhs: Expression, rhs: Expression, leading_sign=LeadingSign.POSITIVE):
+    def __init__(self, lhs: Expression, rhs: Expression, sign=Sign.POSITIVE):
         self.lhs = lhs.copy_without_sign()
         self.rhs = rhs.copy_without_sign()
 
-        if lhs.leading_sign == LeadingSign.NEGATIVE:
-            leading_sign = -leading_sign
-            lhs.leading_sign = LeadingSign.POSITIVE
+        if lhs.sign == Sign.NEGATIVE:
+            sign = -sign
+            lhs.sign = Sign.POSITIVE
 
-        if rhs.leading_sign == LeadingSign.NEGATIVE:
-            leading_sign = -leading_sign
-            rhs.leading_sign = LeadingSign.POSITIVE
+        if rhs.sign == Sign.NEGATIVE:
+            sign = -sign
+            rhs.sign = Sign.POSITIVE
 
-        self.leading_sign = leading_sign
+        self.sign = sign
 
     def __neg__(self) -> 'Multiplication':
-        return Multiplication(self.lhs, self.rhs, leading_sign=-self.leading_sign)
+        return Multiplication(self.lhs, self.rhs, sign=-self.sign)
 
     def __repr__(self) -> str:
-        return f"{self.leading_sign.value}[{repr(self.lhs)}⋅{repr(self.rhs)}]"
+        return f"{self.sign.value}[{repr(self.lhs)}⋅{repr(self.rhs)}]"
+    
+    def expand(self) -> Union['Multiplication', Addition]:
+        if isinstance(self.lhs, Addition):
+            rhs = self.rhs.expand()
+            return Addition(
+                Multiplication(self.lhs.lhs.expand(), rhs, self.sign),
+                Multiplication(self.lhs.rhs.expand(), rhs, self.sign)               
+            )
+        elif isinstance(self.rhs, Addition):
+            lhs = self.lhs.expand()
+            return Addition(
+                Multiplication(lhs, self.rhs.lhs, self.sign),
+                Multiplication(lhs, self.rhs.lhs, self.sign)               
+            )
+        else:
+            lhs = expand(lhs)
+            rhs = expand(rhs)
 
+            if isinstance(lhs, Multiplication): #root swap (a * b) * c -> a * (b * c)
+                return Multiplication(lhs.lhs, 
+                                    Multiplication(lhs.rhs, rhs, sign=lhs.sign), 
+                                    sign=self.sign)
+            elif isinstance(lhs, Bra) and isinstance(rhs, Multiplication) and isinstance(rhs.lhs, Symbol):
+                return Multiplication(
+                    rhs.lhs,
+                    Multiplication(lhs, rhs.rhs, rhs.sign),
+                    sign=self.sign 
+                )
+            
+        return Multiplication(lhs, rhs, sign=self.sign)
 
 class Operator(Expression):
     def __init__(self, name: str, dagger: bool = False):
@@ -182,6 +216,7 @@ class Operator(Expression):
     def __repr__(self) -> str:
         return f'{Terminal.BOLD}{self.name}{Terminal.NORM}{"†" if self._dagger else ""}'
     
+    def expand(self)
 
 
 class FermionicCreationOperator(Operator):
@@ -255,7 +290,7 @@ class Ket(Expression):
             
 
     def __repr__(self) -> str:
-        return f'{Terminal.CYAN}{self.leading_sign.value}|{", ".join([repr(s) for s in self.state])}⟩{Terminal.NORM}'
+        return f'{Terminal.CYAN}{self.sign.value}|{", ".join([repr(s) for s in self.state])}⟩{Terminal.NORM}'
     
 class Bra(Expression):
     def __init__(self, *state: List[Occupation]):
@@ -283,23 +318,23 @@ class Bra(Expression):
 class FermionKet(Ket):
     def __init__(self, 
                  *state: List[Union[Symbol, Occupation]], 
-                 leading_sign: LeadingSign = LeadingSign.POSITIVE
+                 sign: Sign = Sign.POSITIVE
                  ) -> 'FermionKet':
         super().__init__(*[Occupation(s) if isinstance(s, Symbol) else s for s in state])
-        self.leading_sign = leading_sign
+        self.sign = sign
 
     def __neg__(self) -> 'FermionKet':
-        return FermionKet(*list(self.state).copy(), leading_sign=-self.leading_sign)
+        return FermionKet(*list(self.state).copy(), sign=-self.sign)
 
     def dagger(self) -> 'FermionBra':
-        return FermionBra(*list(self.state).copy(), leading_sign=self.leading_sign)
+        return FermionBra(*list(self.state).copy(), sign=self.sign)
 
     def create(self, symbol: Symbol) -> Expression:
         result = [o for o in self.state if o.symbol == symbol]
 
         if len(result) == 0:
             new_ket = FermionKet(symbol, *[o.symbol for o in self.state]).order()
-            new_ket.leading_sign = self.leading_sign
+            new_ket.sign = self.sign
             return new_ket
         
         return Special.ZERO()
@@ -314,13 +349,13 @@ class FermionKet(Ket):
             raise ValueError(f'Fermion Ket should not have more than one state {symbol}')
         
         eveness_indicator = result[0]
-        if self.leading_sign == LeadingSign.NEGATIVE:
+        if self.sign == Sign.NEGATIVE:
             eveness_indicator += 1
 
         is_index_even = (eveness_indicator % 2 == 0)
 
         new_ket = FermionKet(*[o.symbol for o in self.state if o.symbol != symbol])
-        new_ket.leading_sign = LeadingSign.POSITIVE if is_index_even else LeadingSign.NEGATIVE
+        new_ket.sign = Sign.POSITIVE if is_index_even else Sign.NEGATIVE
 
         return new_ket
     
@@ -341,20 +376,20 @@ class FermionKet(Ket):
             result = left + [minimum] + right
 
 
-        commutations += 0 if self.leading_sign == LeadingSign.POSITIVE else 1
+        commutations += 0 if self.sign == Sign.POSITIVE else 1
 
         new_fermion_ket = FermionKet(*[r.symbol for r in result])
-        new_fermion_ket.leading_sign = LeadingSign.POSITIVE if commutations % 2 == 0 else LeadingSign.NEGATIVE
+        new_fermion_ket.sign = Sign.POSITIVE if commutations % 2 == 0 else Sign.NEGATIVE
 
         return new_fermion_ket
 
 class FermionBra(Bra):
-    def __init__(self, *state: List[Union[Symbol, Occupation]], leading_sign: LeadingSign = LeadingSign.POSITIVE):
+    def __init__(self, *state: List[Union[Symbol, Occupation]], sign: Sign = Sign.POSITIVE):
         super().__init__(*[Occupation(s) if isinstance(s, Symbol) else s for s in state])
-        self.leading_sign = leading_sign
+        self.sign = sign
 
     def dagger(self) -> FermionKet:
-        return FermionKet(*list(self.state).copy(), leading_sign=self.leading_sign)
+        return FermionKet(*list(self.state).copy(), sign=self.sign)
 
     def inner(self, rhs: FermionKet) -> Symbol:
         ordered_bra = self.order()
@@ -362,7 +397,7 @@ class FermionBra(Bra):
 
         if ordered_bra == ordered_ket:
             result = Special.ONE()
-            result.leading_sign = ordered_bra.leading_sign * ordered_ket.leading_sign
+            result.sign = ordered_bra.sign * ordered_ket.sign
             return result
         
         return Special.ZERO()
@@ -384,10 +419,10 @@ class FermionBra(Bra):
             result = left + [minimum] + right
 
 
-        commutations += 0 if self.leading_sign == LeadingSign.POSITIVE else 1
+        commutations += 0 if self.sign == Sign.POSITIVE else 1
 
         new_fermion_bra = FermionBra(*[r.symbol for r in result])
-        new_fermion_bra.leading_sign = LeadingSign.POSITIVE if commutations % 2 == 0 else LeadingSign.NEGATIVE
+        new_fermion_bra.sign = Sign.POSITIVE if commutations % 2 == 0 else Sign.NEGATIVE
 
         return new_fermion_bra
 
@@ -398,20 +433,20 @@ Fd = FermionicCreationOperator
 def expand_multiplication(multiplication: Multiplication) -> Expression:
     lhs = multiplication.lhs
     rhs = multiplication.rhs
-    sign = multiplication.leading_sign
+    sign = multiplication.sign
 
     if isinstance(lhs, Addition): 
         # Rule: (a + b) * c -> a * c + b * c
         return Addition(
-            expand(Multiplication(lhs.lhs, rhs, leading_sign=sign)), 
-            expand(Multiplication(lhs.rhs, rhs, leading_sign=sign))
+            expand(Multiplication(lhs.lhs, rhs, sign=sign)), 
+            expand(Multiplication(lhs.rhs, rhs, sign=sign))
         )
     elif isinstance(rhs, Addition):
         # Rule: a * (b + c) -> a * b + a * c
         return expand(
             Addition(
-                expand(Multiplication(lhs, rhs.lhs, leading_sign=sign)), 
-                expand(Multiplication(lhs, rhs.rhs, leading_sign=sign))
+                expand(Multiplication(lhs, rhs.lhs, sign=sign)), 
+                expand(Multiplication(lhs, rhs.rhs, sign=sign))
                 )
             )
     else:
@@ -420,16 +455,16 @@ def expand_multiplication(multiplication: Multiplication) -> Expression:
 
         if isinstance(lhs, Multiplication): #root swap (a * b) * c -> a * (b * c)
             return Multiplication(lhs.lhs, 
-                                  Multiplication(lhs.rhs, rhs, leading_sign=lhs.leading_sign), 
-                                  leading_sign=sign)
+                                  Multiplication(lhs.rhs, rhs, sign=lhs.sign), 
+                                  sign=sign)
         elif isinstance(lhs, Bra) and isinstance(rhs, Multiplication) and isinstance(rhs.lhs, Symbol):
             return Multiplication(
              rhs.lhs,
-             Multiplication(lhs, rhs.rhs, rhs.leading_sign),
-             leading_sign=sign 
+             Multiplication(lhs, rhs.rhs, rhs.sign),
+             sign=sign 
             )
         
-    return Multiplication(lhs, rhs, leading_sign=sign)
+    return Multiplication(lhs, rhs, sign=sign)
     
 def expand_addition(addition: Addition) -> Expression:
     lhs = addition.lhs
@@ -461,10 +496,10 @@ def simplify_multiplication(multiplication: Multiplication) -> Expression:
     if (lhs == Special.ZERO()) or (rhs == Special.ZERO()):
         return Special.ZERO()
     elif lhs == Special.ONE():
-        rhs.leading_sign = lhs.leading_sign * rhs.leading_sign
+        rhs.sign = lhs.sign * rhs.sign
         return rhs
     elif rhs == Special.ONE():
-        lhs.leading_sign = lhs.leading_sign * rhs.leading_sign
+        lhs.sign = lhs.sign * rhs.sign
         return lhs
     elif isinstance(lhs, Operator) and isinstance(rhs, Ket):
         return lhs.apply(rhs)
