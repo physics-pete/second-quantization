@@ -1,589 +1,495 @@
 from abc import ABC
-from typing import List, Union
-from dataclasses import dataclass
+from typing import List, Union, Dict, Tuple
 from enum import Enum
-import functools 
-import operator
-
-DEBUG = False
-
-def debug(*args, **kwargs):
-    if DEBUG:
-        print(*args, **kwargs)
-
-class Terminal:
-    BOLD = '\033[1m'
-    NORM = '\033[0m'
-    GREEN = '\033[92m'
-    CYAN = '\033[96m'
 
 class Sign(Enum):
     POSITIVE = ""
     NEGATIVE = "-"
 
-    def __mul__(self, other) -> 'Sign':
-        if f'{self.value}{other.value}'== '-':
-            return Sign.NEGATIVE
-        return Sign.POSITIVE
+    def __repr__(self):
+        return self.value
     
+    def __str__(self):
+        return self.value
+
+    def __mul__(self, rhs: 'Sign') -> 'Sign':
+        return Sign.POSITIVE if self == rhs else Sign.NEGATIVE
+
     def __neg__(self) -> 'Sign':
-        if self == Sign.POSITIVE:
-            return Sign.NEGATIVE
-        return Sign.POSITIVE
+        return Sign.NEGATIVE if self == Sign.POSITIVE else Sign.POSITIVE
+    
+    def number(self) -> int:
+        return 1 if self == Sign.POSITIVE else -1
+    
+    def from_number(number) -> 'Sign':
+        return Sign.POSITIVE if number >= 0 else Sign.NEGATIVE
 
 class Expression(ABC):
-    sign = Sign.POSITIVE
+    def __init__(self, sign: Sign = Sign.POSITIVE):
+        self.sign = sign
 
-    def __add__(self, other: 'Expression') -> 'Expression':
+    def __add__(self, other: 'Expression') -> 'Addition':
         return Addition(self, other)
     
-    def __sub__(self, other: 'Expression') -> 'Expression':
+    def __sub__(self, other: 'Expression') -> 'Addition':
         return Addition(self, -other)
-    
-    def __mul__(self, other: 'Expression') -> 'Expression':
+
+    def __mul__(self, other: 'Expression') -> 'Multiplication':
         return Multiplication(self, other)
-    
-    def copy_without_sign(self) -> 'Expression':
-        return self
-    
+
+    def __neg__(self) -> 'Expression':
+        raise NotImplementedError('unary negative was not implemented for this class')
+
+    def copy(self) -> 'Expression':
+        raise NotImplementedError('copy was not implemented for this class')
+
     def expand(self) -> 'Expression':
         return self
+
+    def simplify(self) -> 'Expression':
+       return self
+
 
 class Symbol(Expression):
     def __init__(self, name: str, sign: Sign = Sign.POSITIVE):
         self.name = name
         self.sign = sign
 
-    def __repr__(self) -> str:
-        return f'{self.sign.value}{self.name}'
+    def __repr__(self):
+        return f'{self.sign}{self.name}'
     
-    def __neg__(self) -> 'Symbol':
-        return Symbol(self.name, sign=-self.sign)
-
-    def __eq__(self, other) -> bool:
+    def __neg__(self):
+        return Symbol(self.name, -self.sign)
+    
+    def __lt__(self, other):
+        return self.name < other.name
+    
+    def __eq__(self, other: 'Symbol') -> bool:
         return (
             isinstance(other, Symbol) 
-            and (self.name == other.name) 
-            and (self.sign == other.sign)
+            and self.name == other.name 
+            and self.sign == other.sign
         )
     
-    def copy_without_sign(self) -> 'Symbol':
-        return Symbol(self.name)
-    
-    def expand(self) -> 'Symbol':
-        return self
+    def __hash__(self):
+        return hash((self.name, self.sign))
 
-class Integer(Symbol):
+    def copy(self):
+        return Symbol(self.name, self.sign)
+    
+class Integer(Expression):
     def __init__(self, number: int, sign: Sign = Sign.POSITIVE):
         self.number = number
         self.sign = sign
 
-    def copy_without_sign(self) -> 'Integer':
-        return Integer(self.number)
-
-    @property
-    def name(self):
-        return str(self.number)
+    def __repr__(self):
+        return f'{self.sign}{self.number}'
     
-    @property
-    def value(self) -> int:
-        return self.number if self.sign == Sign.POSITIVE else -self.number
-    
-    def __add__(self, other: Expression) -> Expression:
-        if isinstance(other, Integer):
-            result = self.value + other.value
-            return Integer(abs(result), Sign.POSITIVE if result >= 0 else Sign.NEGATIVE)
-        
-        return super().__add__(other)
-    
-    def __sub__(self, other: Expression) -> Expression:
-        if isinstance(other, Integer):
-            result = self.value - other.value
-            return Integer(abs(result), Sign.POSITIVE if result >= 0 else Sign.NEGATIVE)
-        
-        return super().__sub__(other)
-    
-    def __mul__(self, other: Expression) -> Expression:
-        if isinstance(other, Integer):
-            result = self.value * other.value
-            return Integer(abs(result), Sign.POSITIVE if result >= 0 else Sign.NEGATIVE)
-        
-        return super().__mul__(other)
-    
-    def __neg__(self) -> 'Integer':
+    def __neg__(self):
         return Integer(self.number, -self.sign)
     
-    def __eq__(self, other) -> bool:
-        return (isinstance(other, Integer)
-                and self.value == other.value
-                and self.sign == other.sign)
+    def __eq__(self, other):
+        return isinstance(other, Integer) and self.number == other.number and self.sign == other.sign
+    
+    def copy(self):
+        return Integer(self.number, self.sign)
+    
+    def add(self, other: 'Integer'):
+        a = self.sign.number() * self.number
+        b = other.sign.number() * other.number
 
-    def expand(self) -> 'Integer':
-        return self
-
-class Special:
-    def ZERO():
+        r = a + b
+        return Integer(abs(r), Sign.from_number(r))
+    
+    @classmethod
+    def ZERO(cls):
         return Integer(0)
 
-    def ONE():
+    @classmethod
+    def ONE(cls):
         return Integer(1)
 
 class Addition(Expression):
     def __init__(self, lhs: Expression, rhs: Expression, sign: Sign = Sign.POSITIVE):
-        self.lhs = lhs.copy_without_sign()
-        self.rhs = rhs.copy_without_sign()
+        super().__init__(sign)
+        self.lhs = lhs.copy()
+        self.rhs = rhs.copy()
 
-        if (lhs.sign == Sign.NEGATIVE and rhs.sign == Sign.NEGATIVE):
-            self.sign = Sign.NEGATIVE * sign
-        elif (lhs.sign == Sign.NEGATIVE and rhs.sign == Sign.POSITIVE):
-            self.sign = Sign.NEGATIVE * sign
-            rhs.sign = Sign.POSITIVE
-        elif (lhs.sign == Sign.POSITIVE and rhs.sign == Sign.NEGATIVE):
-            self.rhs.sign = Sign.NEGATIVE
-            self.sign = sign
-        else:
-            self.sign = sign
+        if lhs.sign == Sign.NEGATIVE and rhs.sign == Sign.NEGATIVE:
+            super().__init__(sign * Sign.NEGATIVE)
+            self.lhs.sign = Sign.POSITIVE
+            self.rhs.sign = Sign.POSITIVE
 
-    def __repr__(self) -> str:
-        return f"({repr(self.lhs)} + {repr(self.rhs)})"
+    def __neg__(self):
+        return Addition(self.lhs, self.rhs, -self.sign)
+
+    def __repr__(self):
+        if self.rhs.sign == Sign.NEGATIVE:
+            return f'{self.sign}({self.lhs} - {-self.rhs})'
+        return f'{self.sign}({self.lhs} + {self.rhs})'
     
-    def expand(self) -> 'Addition':
+    def copy(self):
+        return Addition(self.lhs, self.rhs, self.sign)
+    
+    def simplify(self) -> Expression:
+         if isinstance(self.lhs, Integer) and isinstance(self.rhs, Integer):
+             return self.lhs.add(self.rhs)
+         elif isinstance(self.lhs, Integer) and self.lhs == Integer(0):
+             return self.rhs
+         elif isinstance(self.rhs, Integer) and self.rhs == Integer(0):
+             return self.lhs
+         
+         return Addition(self.lhs.simplify(), self.rhs.simplify(), self.sign)
+         
+    def expand(self) -> Expression:
         return Addition(self.lhs.expand(), self.rhs.expand(), self.sign)
+
     
 class Multiplication(Expression):
-    def __init__(self, lhs: Expression, rhs: Expression, sign=Sign.POSITIVE):
-        self.lhs = lhs.copy_without_sign()
-        self.rhs = rhs.copy_without_sign()
+    def __init__(self, lhs: Expression, rhs: Expression, sign: Sign = Sign.POSITIVE):
+        super().__init__(sign * lhs.sign * rhs.sign)
+        self.lhs = lhs.copy()
+        self.rhs = rhs.copy()
 
-        if lhs.sign == Sign.NEGATIVE:
-            sign = -sign
-            lhs.sign = Sign.POSITIVE
+        if self.__should_be_swapped(self.lhs, self.rhs):
+            self.lhs, self.rhs = self.rhs, self.lhs
 
-        if rhs.sign == Sign.NEGATIVE:
-            sign = -sign
-            rhs.sign = Sign.POSITIVE
+        self.lhs.sign = Sign.POSITIVE
+        self.rhs.sign = Sign.POSITIVE
 
-        self.sign = sign
+    def __should_be_swapped(self, lhs: Expression, rhs: Expression):
+        return (
+            (isinstance(rhs, Integer) and not isinstance(lhs, Integer))
+            or (isinstance(rhs, Symbol) and not isinstance(lhs, (Symbol, Integer)))
+            or (isinstance(rhs, Symbol) and isinstance(lhs, Symbol) and rhs < lhs)
+        )
 
     def __neg__(self) -> 'Multiplication':
         return Multiplication(self.lhs, self.rhs, sign=-self.sign)
 
-    def __repr__(self) -> str:
-        return f"{self.sign.value}[{repr(self.lhs)}⋅{repr(self.rhs)}]"
+    def __repr__(self):
+        return f'{self.sign}[{self.lhs}⋅{self.rhs}]'
     
-    def expand(self) -> Union['Multiplication', Addition]:
+    def copy(self):
+        return Multiplication(self.lhs, self.rhs, self.sign)
+    
+    def expand(self):
         if isinstance(self.lhs, Addition):
-            rhs = self.rhs.expand()
             return Addition(
-                Multiplication(self.lhs.lhs.expand(), rhs, self.sign),
-                Multiplication(self.lhs.rhs.expand(), rhs, self.sign)               
+                Multiplication(self.lhs.lhs, self.rhs, self.sign),
+                Multiplication(self.lhs.rhs, self.rhs, self.sign)
             )
         elif isinstance(self.rhs, Addition):
-            lhs = self.lhs.expand()
             return Addition(
-                Multiplication(lhs, self.rhs.lhs, self.sign),
-                Multiplication(lhs, self.rhs.lhs, self.sign)               
+                Multiplication(self.lhs, self.rhs.lhs, self.sign),
+                Multiplication(self.lhs, self.rhs.rhs, self.sign)
             )
-        else:
-            lhs = expand(lhs)
-            rhs = expand(rhs)
-
-            if isinstance(lhs, Multiplication): #root swap (a * b) * c -> a * (b * c)
-                return Multiplication(lhs.lhs, 
-                                    Multiplication(lhs.rhs, rhs, sign=lhs.sign), 
-                                    sign=self.sign)
-            elif isinstance(lhs, Bra) and isinstance(rhs, Multiplication) and isinstance(rhs.lhs, Symbol):
-                return Multiplication(
-                    rhs.lhs,
-                    Multiplication(lhs, rhs.rhs, rhs.sign),
-                    sign=self.sign 
-                )
-            
-        return Multiplication(lhs, rhs, sign=self.sign)
-
-class Operator(Expression):
-    def __init__(self, name: str, dagger: bool = False):
-        self.name = name 
-        self._dagger = dagger
+        elif isinstance(self.lhs, Multiplication):
+            return Multiplication(
+                self.lhs.lhs, 
+                Multiplication(self.lhs.rhs, self.rhs, self.lhs.sign), 
+                self.sign)
+        elif ((isinstance(self.rhs, Multiplication) and isinstance(self.rhs.lhs, (Symbol, Integer)) and not isinstance(self.lhs, (Symbol, Integer)))
+            or (isinstance(self.rhs, Multiplication) and isinstance(self.rhs.lhs, Integer) and isinstance(self.lhs, Symbol))
+            ):
+            return Multiplication(
+                self.rhs.lhs,
+                Multiplication(self.lhs, self.rhs.rhs, self.rhs.sign),
+                self.sign
+            )
+        
+        return Multiplication(self.lhs.expand(), self.rhs.expand(), self.sign)
     
-    @property
-    def dagger(self) -> 'Operator':
-        return Operator(self.name, ~self._dagger)
-
-    def apply(self, ket: 'Ket') -> Expression:
-        return Multiplication(self, ket)
-
-    def __repr__(self) -> str:
-        return f'{Terminal.BOLD}{self.name}{Terminal.NORM}{"†" if self._dagger else ""}'
-    
-    def expand(self)
-
-
-class FermionicCreationOperator(Operator):
-    def __init__(self, symbol: Symbol):
-        super().__init__('c')
-        self.symbol = symbol
-
-    @property
-    def dagger(self) -> Operator:
-        return FermionAnnihilationOperator(self.symbol)
-    
-    def apply(self, ket: 'FermionKet') -> Expression:
-        return ket.create(self.symbol)
-
-    def __repr__(self):
-        return f'{Terminal.BOLD}{Terminal.GREEN}{self.name}_{self.symbol}†{Terminal.NORM}'
-    
-class FermionAnnihilationOperator(Operator):
-    def __init__(self, symbol: Symbol):
-        super().__init__('c')
-        self.symbol = symbol
-
-    def apply(self, ket: 'FermionKet') -> Expression:
-        return ket.destroy(self.symbol)
-
-    @property
-    def dagger(self) -> Operator:
-        return FermionicCreationOperator(self.symbol)
-
-    def __repr__(self):
-        return f'{Terminal.BOLD}{Terminal.GREEN}{self.name}_{self.symbol}{Terminal.NORM}'
-
-@dataclass
-class Occupation:
-    symbol: Symbol
-    number: int = 1
-
-    def __repr__(self) -> str:
-        if self.number == 1:
-            return repr(self.symbol)
-        elif self.number > 1:
-            return f'{self.number}.{repr(self.symbol)}'
-        return ''
+    def simplify(self) -> Expression:
+        if isinstance(self.rhs, Ket) and isinstance(self.lhs, Operator):
+            return self.lhs.apply(self.rhs)
+        elif ((isinstance(self.rhs, Integer) and self.rhs == Integer(0))
+            or (isinstance(self.lhs, Integer) and self.lhs == Integer(0))
+            ):
+            return Integer(0)
+        elif (isinstance(self.rhs, Integer) and self.rhs == Integer(1)):
+            lhs = self.lhs.copy()
+            lhs.sign = lhs.sign * self.sign
+            return lhs
+        elif (isinstance(self.lhs, Integer) and self.lhs == Integer(1)):
+            rhs = self.rhs.copy()
+            rhs.sign = rhs.sign * self.sign
+            return rhs
+        elif isinstance(self.lhs, Bra) and isinstance(self.rhs, Ket):
+            return self.lhs.inner(self.rhs)
+        
+        return Multiplication(self.lhs.simplify(), self.rhs.simplify(), self.sign)
 
 class Ket(Expression):
-    def __init__(self, *state: List[Occupation]):
-        self.state =  state
+    def __init__(self, state: Union[None, Tuple[Symbol], List[Symbol], Dict[Symbol, int]] = None, sign=Sign.POSITIVE):
+        super().__init__(sign)
 
-    def create(self, symbol: Symbol):
-        raise NotImplemented('create for Ket not implemented')
+        if isinstance(state,dict):
+            self.state = {k:v for k, v in state.items()}
+        elif isinstance(state, list) or isinstance(state, tuple):
+            self.state = {k:1 for k in state}
+        elif state == None:
+            self.state = {}
+        
+    def __neg__(self):
+        raise NotImplementedError('unary negative was not implemented for Ket') 
+        
+    def __repr__(self):
+        lst = ', '.join([
+            f'{s}{"" if n == 1 else ":" + str(n)}'
+            for s, n in self.state.items()
+        ])
+        return f'{self.sign}|{lst}⟩'
     
-    def destroy(self, symbol: Symbol):
-        raise NotImplemented('destroy for Ket not implemented')
+    def copy(self):
+        raise NotImplementedError('copy was not implemented for Ket') 
     
-    def order(self):
-        raise NotImplemented('order for Ket not implemented')
-
-    def dagger(self) -> 'Bra':
-        raise NotImplemented('dagger for Ket not implemented')
-
-    def __eq__(self, rhs):
-        return (
-            (isinstance(rhs, Ket) or isinstance(rhs, Bra))
-            and (len(self.state) == len(rhs.state))
-            and functools.reduce(
-                operator.and_, 
-                [l == r for l, r in zip(self.state, rhs.state)],
-                True
-                )
-        )
-            
-
-    def __repr__(self) -> str:
-        return f'{Terminal.CYAN}{self.sign.value}|{", ".join([repr(s) for s in self.state])}⟩{Terminal.NORM}'
+    def create(self, state: Symbol) -> 'Ket':
+        raise NotImplementedError('create was not implemented for Ket') 
     
+    def annihilate(self, state: Symbol) -> 'Ket':
+        raise NotImplementedError('annihilate was not implemented for Ket') 
+
 class Bra(Expression):
-    def __init__(self, *state: List[Occupation]):
-        self.state =  state
+    def __init__(self, state: Union[None, Tuple[Symbol], List[Symbol], Dict[Symbol, int]] = None, sign=Sign.POSITIVE):
+        super().__init__(sign)
 
-    def __repr__(self) -> str:
-        return f'{Terminal.CYAN}⟨{", ".join([repr(s) for s in self.state])}|{Terminal.NORM}'
+        if isinstance(state,dict):
+            self.state = {k:v for k, v in state.items()}
+        elif isinstance(state, list) or isinstance(state, tuple):
+            self.state = {k:1 for k in state}
+        elif state == None:
+            self.state = {}
+        
+    def __neg__(self):
+        raise NotImplementedError('unary negative was not implemented for Ket') 
+        
+    def __repr__(self):
+        lst = ', '.join([
+            f'{s}{"" if n == 1 else ":" + str(n)}'
+            for s, n in self.state.items()
+        ])
+        return f'{self.sign}⟨{lst}|'
     
-    def dagger(self) -> Ket:
-        raise NotImplemented('dagger for Bra not implemented')
+    def copy(self):
+        raise NotImplementedError('copy was not implemented for Ket') 
     
-    def inner(self, rhs) -> Symbol:
-        raise NotImplementedError('inner product is not implemented')
+    def create(self, state: Symbol) -> 'Ket':
+        raise NotImplementedError('create was not implemented for Ket') 
+    
+    def annihilate(self, state: Symbol) -> 'Ket':
+        raise NotImplementedError('annihilate was not implemented for Ket')
 
-    def __eq__(self, rhs: Expression) -> bool:
-        return (
-            (isinstance(rhs, Ket) or isinstance(rhs, Bra))
-            and (len(self.state) == len(rhs.state))
-            and functools.reduce(
-                operator.and_, 
-                [l == r for l, r in zip(self.state, rhs.state)]
-                )
-        )
+    def inner(self, ket: Ket):
+        if len(self.state) != len(ket.state):
+            return Integer.ZERO()
+        
+        is_the_same = all([
+            b_state == k_state and b_number == k_number
+            for (b_state, b_number), (k_state, k_number) in zip(self.state.items(), ket.state.items())
+        ])
+
+        return Integer.ONE() if is_the_same else Integer.ZERO()
 
 class FermionKet(Ket):
-    def __init__(self, 
-                 *state: List[Union[Symbol, Occupation]], 
-                 sign: Sign = Sign.POSITIVE
-                 ) -> 'FermionKet':
-        super().__init__(*[Occupation(s) if isinstance(s, Symbol) else s for s in state])
-        self.sign = sign
+    def __init__(self, *state: List[Symbol], sign=Sign.POSITIVE):
+        ordered, order_sign = FermionKet._order(state)
+        super().__init__(ordered, sign * order_sign)
 
-    def __neg__(self) -> 'FermionKet':
-        return FermionKet(*list(self.state).copy(), sign=-self.sign)
+    def __neg__(self):
+        return FermionKet(*list(self.state.keys()), sign=-self.sign)
 
-    def dagger(self) -> 'FermionBra':
-        return FermionBra(*list(self.state).copy(), sign=self.sign)
+    def __eq__(self, other):
+        return (
+            isinstance(other, FermionKet)
+            and self.sign == other.sign
+            and len(self.state) == len(other.state)
+            and all([
+                s == o
+                for s, o in zip(self.state, other.state)
+            ])
+        )
 
-    def create(self, symbol: Symbol) -> Expression:
-        result = [o for o in self.state if o.symbol == symbol]
+    def copy(self):
+        return FermionKet(*list(self.state.keys()), sign=self.sign)
 
-        if len(result) == 0:
-            new_ket = FermionKet(symbol, *[o.symbol for o in self.state]).order()
-            new_ket.sign = self.sign
-            return new_ket
+    @classmethod
+    def _order(cls, states: Tuple[List[Symbol]]) -> Tuple[List[Symbol], Sign]:
+        result = []
+        resulting_sign = Sign.POSITIVE
+
+        while len(states) > 0:
+            element = min(states)
+            index = states.index(element)
+
+            states = states[:index] + states[index+1:]
+
+            index_sign = Sign.POSITIVE
+            if index % 2 != 0:
+                index_sign = Sign.NEGATIVE
+
+            resulting_sign *= index_sign
+
+            result.append(element)
         
-        return Special.ZERO()
-    
-    def destroy(self, symbol: Symbol) -> Expression:
-        result = [index for index, o in enumerate(self.state) if o.symbol == symbol]
+        return result, resulting_sign
 
-        if len(result) == 0:
-            return Special.ZERO()
-        
-        if len(result) > 1:
-            raise ValueError(f'Fermion Ket should not have more than one state {symbol}')
-        
-        eveness_indicator = result[0]
-        if self.sign == Sign.NEGATIVE:
-            eveness_indicator += 1
-
-        is_index_even = (eveness_indicator % 2 == 0)
-
-        new_ket = FermionKet(*[o.symbol for o in self.state if o.symbol != symbol])
-        new_ket.sign = Sign.POSITIVE if is_index_even else Sign.NEGATIVE
-
-        return new_ket
-    
     def order(self) -> 'FermionKet':
-        if len(self.state) <= 1:
-            return self
+        result, resulting_sign = FermionKet._order(tuple(self.state.keys()))
+        return FermionKet(*result, sign=self.sign * resulting_sign)
 
-        result = self.state
-        commutations = 0
+    def create(self, state: Symbol) -> 'FermionKet':
+        if state in self.state.keys():
+            return Integer.ZERO()
+        
+        return (
+            FermionKet(*([state] + list(self.state.keys())), sign=self.sign)
+            .order()
+        )
+    
+    @classmethod
+    def _annihilate(cls, state: Symbol, states: List[Symbol]) -> Tuple[List[Symbol], Sign]:
+        if state not in states:
+            return Integer.ZERO(), Sign.POSITIVE
+        
+        index = states.index(state)
 
-        for i in range(len(self.state)):
-            minimum = min(result[i:], key=lambda o: o.symbol.name)
-            index_minimum = result.index(minimum, i)
-            commutations += index_minimum - i
+        new_states = states[:index] + states[index+1:]
 
-            left = list(result[:i])
-            right = [r for r in result[i:] if r != minimum]
-            result = left + [minimum] + right
+        index_sign = Sign.POSITIVE
+        if index % 2 != 0:
+            index_sign = Sign.NEGATIVE
 
+        return new_states, index_sign
 
-        commutations += 0 if self.sign == Sign.POSITIVE else 1
+    def annihilate(self, state: Symbol) -> 'FermionKet':
+        result, resulting_sign = FermionKet._annihilate(state, list(self.state.keys()))
 
-        new_fermion_ket = FermionKet(*[r.symbol for r in result])
-        new_fermion_ket.sign = Sign.POSITIVE if commutations % 2 == 0 else Sign.NEGATIVE
+        if result == Integer.ZERO():
+            return result
+        return FermionKet(*result, sign=resulting_sign * self.sign).order()
 
-        return new_fermion_ket
 
 class FermionBra(Bra):
-    def __init__(self, *state: List[Union[Symbol, Occupation]], sign: Sign = Sign.POSITIVE):
-        super().__init__(*[Occupation(s) if isinstance(s, Symbol) else s for s in state])
-        self.sign = sign
+    def __init__(self, *state: List[Symbol], sign=Sign.POSITIVE):
+        ordered, order_sign = FermionKet._order(state)
+        super().__init__(ordered, sign * order_sign)
 
-    def dagger(self) -> FermionKet:
-        return FermionKet(*list(self.state).copy(), sign=self.sign)
-
-    def inner(self, rhs: FermionKet) -> Symbol:
-        ordered_bra = self.order()
-        ordered_ket = rhs.order()
-
-        if ordered_bra == ordered_ket:
-            result = Special.ONE()
-            result.sign = ordered_bra.sign * ordered_ket.sign
-            return result
-        
-        return Special.ZERO()
+    def __neg__(self):
+        return FermionBra(*list(self.state.keys()), sign=-self.sign)
 
     def order(self) -> 'FermionBra':
-        if len(self.state) <= 1:
-            return self
+        result, resulting_sign = FermionKet._order(tuple(self.state.keys()))
+        return FermionBra(*result, sign=self.sign * resulting_sign)
 
-        result = self.state
-        commutations = 0
-
-        for i in range(len(self.state)):
-            minimum = min(result[i:], key=lambda o: o.symbol.name)
-            index_minimum = result.index(minimum, i)
-            commutations += index_minimum - i
-
-            left = list(result[:i])
-            right = [r for r in result[i:] if r != minimum]
-            result = left + [minimum] + right
-
-
-        commutations += 0 if self.sign == Sign.POSITIVE else 1
-
-        new_fermion_bra = FermionBra(*[r.symbol for r in result])
-        new_fermion_bra.sign = Sign.POSITIVE if commutations % 2 == 0 else Sign.NEGATIVE
-
-        return new_fermion_bra
-
-# shorthand notation
-F =  FermionAnnihilationOperator
-Fd = FermionicCreationOperator
-
-def expand_multiplication(multiplication: Multiplication) -> Expression:
-    lhs = multiplication.lhs
-    rhs = multiplication.rhs
-    sign = multiplication.sign
-
-    if isinstance(lhs, Addition): 
-        # Rule: (a + b) * c -> a * c + b * c
-        return Addition(
-            expand(Multiplication(lhs.lhs, rhs, sign=sign)), 
-            expand(Multiplication(lhs.rhs, rhs, sign=sign))
-        )
-    elif isinstance(rhs, Addition):
-        # Rule: a * (b + c) -> a * b + a * c
-        return expand(
-            Addition(
-                expand(Multiplication(lhs, rhs.lhs, sign=sign)), 
-                expand(Multiplication(lhs, rhs.rhs, sign=sign))
-                )
-            )
-    else:
-        lhs = expand(lhs)
-        rhs = expand(rhs)
-
-        if isinstance(lhs, Multiplication): #root swap (a * b) * c -> a * (b * c)
-            return Multiplication(lhs.lhs, 
-                                  Multiplication(lhs.rhs, rhs, sign=lhs.sign), 
-                                  sign=sign)
-        elif isinstance(lhs, Bra) and isinstance(rhs, Multiplication) and isinstance(rhs.lhs, Symbol):
-            return Multiplication(
-             rhs.lhs,
-             Multiplication(lhs, rhs.rhs, rhs.sign),
-             sign=sign 
-            )
-        
-    return Multiplication(lhs, rhs, sign=sign)
+    def copy(self):
+        return FermionBra(*list(self.state.keys()), sign=self.sign)
     
-def expand_addition(addition: Addition) -> Expression:
-    lhs = addition.lhs
-    rhs = addition.rhs
+    def create(self, state: Symbol) -> 'FermionKet':
+        if state in self.state.keys():
+            return Integer.ZERO()
+        
+        return (
+            FermionBra(*([state] + list(self.state.keys())), sign=self.sign)
+            .order()
+        )
+    
+    def annihilate(self, state: Symbol) -> 'FermionKet':
+        result, resulting_sign = FermionKet._annihilate(state, list(self.state.keys()))
+        
+        if result == Integer.ZERO():
+            return result
+        return FermionBra(*result, sign=resulting_sign * self.sign).order()
 
-    return Addition(expand(lhs), expand(rhs))
+    def __eq__(self, other):
+        return (
+            isinstance(other, FermionBra)
+            and self.sign == other.sign
+            and len(self.state) == len(other.state)
+            and all([
+                s == o
+                for s, o in zip(self.state, other.state)
+            ])
+        )
+
+
+class Operator(Expression):
+    def __init__(self, name: str, dagger: bool=False, sign: Sign=Sign.POSITIVE):
+        self.name = name
+        self._dagger = dagger
+        super().__init__(sign)
+
+    def copy(self):
+        return Operator(self.name, self._dagger, self.sign)
+
+    def __repr__(self):
+        return f'{self.sign}{self.name}{"†" if self._dagger else ""}'
+
+    def dagger(self):
+        return Operator(self.name, ~self._dagger, self.sign)
+    
+    def apply(self, vec:Union[Ket, Bra]) -> Union[Ket, Bra, Integer]:
+        raise NotImplementedError(f"apply not implemented for this operator {repr}")
+
+class FermionCreation(Operator):
+    def __init__(self, state: Symbol, sign: Sign=Sign.POSITIVE):
+        super().__init__(f'c_{state}', dagger=True, sign=sign)
+        self.state = state.copy()
+
+    def copy(self):
+        return FermionCreation(self.state, self.sign)
+    
+    def dagger(self):
+        return FermionAnnihilation(self.state, self.sign)
+    
+    def apply(self, vec:Union[FermionKet, FermionBra]) -> Union[FermionKet, FermionBra, Integer]:
+        if isinstance(vec, FermionKet):
+            return vec.create(self.state)
+        elif isinstance(vec, FermionBra):
+            return vec.annihilate(self.state)
+        else:
+            raise TypeError('Only FermionKet or FermionBra allowed.')
+
+class FermionAnnihilation(Operator):
+    def __init__(self, state: Symbol, sign: Sign=Sign.POSITIVE):
+        super().__init__(f'c_{state}', dagger=False, sign=sign)
+        self.state = state.copy() 
+
+    def copy(self):
+        return FermionAnnihilation(self.state, self.sign)
+    
+    def dagger(self):
+        return FermionCreation(self.state, self.sign)
+    
+    def apply(self, vec:Union[FermionKet, FermionBra]) -> Union[FermionKet, FermionBra, Integer]:
+        if isinstance(vec, FermionKet):
+            return vec.annihilate(self.state)
+        elif isinstance(vec, FermionBra):
+            return vec.create(self.state)
+        else:
+            raise TypeError('Only FermionKet or FermionBra allowed.')
+
+Fd = FermionCreation
+F = FermionAnnihilation
+
 
 def expand(expression: Expression) -> Expression:
-    if isinstance(expression, Multiplication):
-        return expand_multiplication(expression)
-    elif isinstance(expression, Addition):
-        return expand_addition(expression)
-    else:
-        return expression
+    expression_string = ""
 
-def full_expand(expression: Expression) -> Expression:
-    old_representation = ""
-    while repr(expression) != old_representation:
-        old_representation = repr(expression)
-        debug(old_representation, end='\n\n')
-        expression = expand(expression)
+    while expression_string != repr(expression):
+        expression_string = repr(expression)
+        expression = expression.expand()
 
     return expression
 
-def simplify_multiplication(multiplication: Multiplication) -> Expression:
-    lhs = multiplication.lhs
-    rhs = multiplication.rhs
+def simplify(expression : Expression) -> Expression:
+    expression_string = ""
 
-    if (lhs == Special.ZERO()) or (rhs == Special.ZERO()):
-        return Special.ZERO()
-    elif lhs == Special.ONE():
-        rhs.sign = lhs.sign * rhs.sign
-        return rhs
-    elif rhs == Special.ONE():
-        lhs.sign = lhs.sign * rhs.sign
-        return lhs
-    elif isinstance(lhs, Operator) and isinstance(rhs, Ket):
-        return lhs.apply(rhs)
-    elif isinstance(lhs, Bra) and isinstance(rhs, Ket):
-        return lhs.inner(rhs)
-    elif (
-        isinstance(lhs, Bra) 
-        and isinstance(rhs, Multiplication) 
-        and isinstance(rhs.lhs, Symbol) 
-        and isinstance(rhs.rhs, Ket)
-        ):
-        return Multiplication(rhs.lhs, lhs.inner(rhs.rhs))
-
-    
-    return Multiplication(simplify(lhs), simplify(rhs))
-
-def simplify_addition(addition: Addition) -> Expression:
-    if addition.lhs == Special.ZERO():
-        return simplify(addition.rhs)
-    elif addition.rhs == Special.ZERO():
-        return simplify(addition.lhs)
-    
-    return Addition(simplify(addition.lhs), simplify(addition.rhs))
-
-
-def simplify(expression: Expression) -> Expression:
-    
-    if isinstance(expression, Addition):
-        return simplify_addition(expression)
-    elif isinstance(expression, Multiplication):
-        return simplify_multiplication(expression)
-    elif isinstance(expression, Ket):
-        return expression.order()
+    while expression_string != repr(expression):
+        expression_string = repr(expression)
+        expression = expression.simplify()
 
     return expression
-
-def full_simplify(expression: Expression) -> Expression:
-    old_representation = ""
-    while repr(expression) != old_representation:
-        old_representation = repr(expression)
-        debug(old_representation, end='\n\n')
-        expression = simplify(expression)
-
-    return expression
-
-def summarize_addition(addition: Addition) -> Expression:
-    lhs = addition.lhs
-    rhs = addition.rhs
-
-    if isinstance(lhs, Multiplication) and isinstance(rhs, Multiplication):
-        if lhs.lhs == rhs.lhs:
-            return lhs.lhs * (lhs.rhs + rhs.rhs)
-        elif lhs.rhs == rhs.rhs:
-            return (lhs.lhs + rhs.lhs) * rhs.rhs
-    elif isinstance(lhs, Symbol) and isinstance(rhs, Symbol):
-        if lhs == rhs:
-            return Integer(2) * rhs
-        elif lhs.name == rhs.name:
-            return Special.ZERO()
-    elif isinstance(lhs, Multiplication) and isinstance(lhs.rhs, Symbol) and isinstance(rhs, Symbol):
-        if lhs.rhs == rhs:
-            return (lhs.lhs + Integer(1)) * rhs
-        elif lhs.rhs.name == rhs.name:
-            return (lhs.lhs - Integer(1)) * rhs
-        
-    return Addition(summarize(lhs), summarize(rhs))
-
-
-def summarize(expression: Expression) -> Expression:
-    if isinstance(expression, Addition):
-        return summarize_addition(expression)
-
-    return expression
-
-def full_summarize(expression: Expression) -> Expression:
-    old_representation = ""
-    while repr(expression) != old_representation:
-        old_representation = repr(expression)
-        expression = summarize(expression)
-
-    return expression
-
-
-
 
 
 
