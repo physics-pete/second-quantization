@@ -46,6 +46,19 @@ class TestSimplify(unittest.TestCase):
             repr(simplify(expanded_term)), 
             "[2⋅b]"
             )
+    
+    def test_simplify_complex_term_negative_sign_before_addition(self):
+        ac = FermionCreation(a)
+        B = FermionBra(a)
+        K = FermionKet()
+
+
+        expanded_term = expand(-(Integer(0) + b * (B * (ac * K))))
+        
+        self.assertEqual(
+            repr(expanded_term.simplify()), 
+            "-[b⋅[⟨a|⋅[c_a†⋅|⟩]]]"
+            )
 
 
 if __name__ == '__main__':

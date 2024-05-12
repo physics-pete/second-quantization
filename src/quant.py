@@ -37,6 +37,11 @@ class Expression(ABC):
     def __mul__(self, other: 'Expression') -> 'Multiplication':
         return Multiplication(self, other)
 
+    def mul_sign(self, sign: Sign) -> 'Expression':
+        this = self.copy()
+        this.sign *= sign 
+        return this
+
     def __neg__(self) -> 'Expression':
         raise NotImplementedError('unary negative was not implemented for this class')
 
@@ -48,6 +53,9 @@ class Expression(ABC):
 
     def simplify(self) -> 'Expression':
        return self
+    
+    def __hash__(self) -> int:
+        return hash(self.sign)
 
 
 class Symbol(Expression):
@@ -108,12 +116,15 @@ class Integer(Expression):
     @classmethod
     def ONE(cls):
         return Integer(1)
+    
+    def __hash__(self) -> int:
+        return hash((self.number, self.sign))
 
 class Addition(Expression):
     def __init__(self, lhs: Expression, rhs: Expression, sign: Sign = Sign.POSITIVE):
         super().__init__(sign)
-        self.lhs = lhs.copy()
-        self.rhs = rhs.copy()
+        self.lhs = lhs
+        self.rhs = rhs
 
         if lhs.sign == Sign.NEGATIVE and rhs.sign == Sign.NEGATIVE:
             super().__init__(sign * Sign.NEGATIVE)
@@ -133,23 +144,26 @@ class Addition(Expression):
     
     def simplify(self) -> Expression:
          if isinstance(self.lhs, Integer) and isinstance(self.rhs, Integer):
-             return self.lhs.add(self.rhs)
+             return self.lhs.add(self.rhs).mul_sign(self.sign)
          elif isinstance(self.lhs, Integer) and self.lhs == Integer(0):
-             return self.rhs
+             return self.rhs.mul_sign(self.sign)
          elif isinstance(self.rhs, Integer) and self.rhs == Integer(0):
-             return self.lhs
+             return self.lhs.mul_sign(self.sign)
          
          return Addition(self.lhs.simplify(), self.rhs.simplify(), self.sign)
          
     def expand(self) -> Expression:
         return Addition(self.lhs.expand(), self.rhs.expand(), self.sign)
 
+    def __hash__(self) -> int:
+        return hash((self.lhs, self.rhs, self.sign))
+
     
 class Multiplication(Expression):
     def __init__(self, lhs: Expression, rhs: Expression, sign: Sign = Sign.POSITIVE):
         super().__init__(sign * lhs.sign * rhs.sign)
-        self.lhs = lhs.copy()
-        self.rhs = rhs.copy()
+        self.lhs = lhs
+        self.rhs = rhs
 
         if self.__should_be_swapped(self.lhs, self.rhs):
             self.lhs, self.rhs = self.rhs, self.lhs
@@ -175,26 +189,31 @@ class Multiplication(Expression):
     
     def expand(self):
         if isinstance(self.lhs, Addition):
+            rhs = self.rhs.copy().expand()
             return Addition(
-                Multiplication(self.lhs.lhs, self.rhs, self.sign),
-                Multiplication(self.lhs.rhs, self.rhs, self.sign)
+                Multiplication(self.lhs.lhs.expand(), rhs, self.sign),
+                Multiplication(self.lhs.rhs.expand(), rhs, self.sign)
             )
         elif isinstance(self.rhs, Addition):
+            lhs = self.lhs.copy().expand()
             return Addition(
-                Multiplication(self.lhs, self.rhs.lhs, self.sign),
-                Multiplication(self.lhs, self.rhs.rhs, self.sign)
+                Multiplication(lhs, self.rhs.lhs.expand(), self.sign),
+                Multiplication(lhs, self.rhs.rhs.expand(), self.sign)
             )
         elif isinstance(self.lhs, Multiplication):
             return Multiplication(
-                self.lhs.lhs, 
-                Multiplication(self.lhs.rhs, self.rhs, self.lhs.sign), 
+                self.lhs.lhs.expand(), 
+                Multiplication(self.lhs.rhs.expand(), self.rhs.expand(), self.lhs.sign), 
                 self.sign)
-        elif ((isinstance(self.rhs, Multiplication) and isinstance(self.rhs.lhs, (Symbol, Integer)) and not isinstance(self.lhs, (Symbol, Integer)))
-            or (isinstance(self.rhs, Multiplication) and isinstance(self.rhs.lhs, Integer) and isinstance(self.lhs, Symbol))
-            ):
+        elif (isinstance(self.rhs, Multiplication) and isinstance(self.rhs.lhs, (Symbol, Integer)) and not isinstance(self.lhs, (Symbol, Integer))):
             return Multiplication(
                 self.rhs.lhs,
-                Multiplication(self.lhs, self.rhs.rhs, self.rhs.sign),
+                Multiplication(self.lhs.expand(), self.rhs.rhs.expand(), self.rhs.sign),
+                self.sign)
+        elif (isinstance(self.rhs, Multiplication) and isinstance(self.rhs.lhs, Integer) and isinstance(self.lhs, Symbol)):
+            return Multiplication(
+                self.rhs.lhs,
+                Multiplication(self.lhs, self.rhs.rhs.expand(), self.rhs.sign),
                 self.sign
             )
         
@@ -202,23 +221,22 @@ class Multiplication(Expression):
     
     def simplify(self) -> Expression:
         if isinstance(self.rhs, Ket) and isinstance(self.lhs, Operator):
-            return self.lhs.apply(self.rhs)
+            return self.lhs.apply(self.rhs).mul_sign(self.sign)
         elif ((isinstance(self.rhs, Integer) and self.rhs == Integer(0))
             or (isinstance(self.lhs, Integer) and self.lhs == Integer(0))
             ):
             return Integer(0)
         elif (isinstance(self.rhs, Integer) and self.rhs == Integer(1)):
-            lhs = self.lhs.copy()
-            lhs.sign = lhs.sign * self.sign
-            return lhs
+            return self.lhs.mul_sign(self.sign)
         elif (isinstance(self.lhs, Integer) and self.lhs == Integer(1)):
-            rhs = self.rhs.copy()
-            rhs.sign = rhs.sign * self.sign
-            return rhs
+            return self.rhs.mul_sign(self.sign)
         elif isinstance(self.lhs, Bra) and isinstance(self.rhs, Ket):
-            return self.lhs.inner(self.rhs)
+            return self.lhs.inner(self.rhs).mul_sign(self.sign)
         
         return Multiplication(self.lhs.simplify(), self.rhs.simplify(), self.sign)
+
+    def __hash__(self) -> int:
+        return hash((self.lhs, self.rhs, self.sign))
 
 class Ket(Expression):
     def __init__(self, state: Union[None, Tuple[Symbol], List[Symbol], Dict[Symbol, int]] = None, sign=Sign.POSITIVE):
@@ -249,6 +267,9 @@ class Ket(Expression):
     
     def annihilate(self, state: Symbol) -> 'Ket':
         raise NotImplementedError('annihilate was not implemented for Ket') 
+
+    def __hash__(self) -> int:
+        return hash((self.sign, *self.state))
 
 class Bra(Expression):
     def __init__(self, state: Union[None, Tuple[Symbol], List[Symbol], Dict[Symbol, int]] = None, sign=Sign.POSITIVE):
@@ -290,6 +311,9 @@ class Bra(Expression):
         ])
 
         return Integer.ONE() if is_the_same else Integer.ZERO()
+
+    def __hash__(self) -> int:
+        return hash((self.sign, *self.state))
 
 class FermionKet(Ket):
     def __init__(self, *state: List[Symbol], sign=Sign.POSITIVE):
@@ -369,6 +393,9 @@ class FermionKet(Ket):
             return result
         return FermionKet(*result, sign=resulting_sign * self.sign).order()
 
+    def __hash__(self) -> int:
+        return hash((self.sign, *self.state))
+
 
 class FermionBra(Bra):
     def __init__(self, *state: List[Symbol], sign=Sign.POSITIVE):
@@ -412,6 +439,8 @@ class FermionBra(Bra):
             ])
         )
 
+    def __hash__(self) -> int:
+        return hash((self.sign, *self.state))
 
 class Operator(Expression):
     def __init__(self, name: str, dagger: bool=False, sign: Sign=Sign.POSITIVE):
@@ -430,6 +459,9 @@ class Operator(Expression):
     
     def apply(self, vec:Union[Ket, Bra]) -> Union[Ket, Bra, Integer]:
         raise NotImplementedError(f"apply not implemented for this operator {repr}")
+    
+    def __hash__(self) -> int:
+        return hash((self.sign, self.name, self._dagger))
 
 class FermionCreation(Operator):
     def __init__(self, state: Symbol, sign: Sign=Sign.POSITIVE):
@@ -472,23 +504,24 @@ class FermionAnnihilation(Operator):
 Fd = FermionCreation
 F = FermionAnnihilation
 
-
 def expand(expression: Expression) -> Expression:
-    expression_string = ""
+    expression_hash = None
 
-    while expression_string != repr(expression):
-        expression_string = repr(expression)
+    while expression_hash != hash(expression):
+        expression_hash = hash(expression)
         expression = expression.expand()
 
     return expression
 
 def simplify(expression : Expression) -> Expression:
-    expression_string = ""
+    expression_hash = None
 
-    while expression_string != repr(expression):
-        expression_string = repr(expression)
+    while expression_hash != hash(expression):
+        expression_hash = hash(expression)
+       # print(expression_string)
         expression = expression.simplify()
 
+   # print(repr(expression))
     return expression
 
 
