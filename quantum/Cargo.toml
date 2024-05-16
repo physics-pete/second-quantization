@@ -1,0 +1,9 @@
+[package]
+name = "quantum"
+version = "0.1.0"
+edition = "2021"
+
+[profile.bench]
+debug = true
+
+[dependencies]

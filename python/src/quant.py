@@ -1,4 +1,5 @@
 from abc import ABC
+from dataclasses import dataclass
 from typing import List, Union, Dict, Tuple
 from enum import Enum
 
@@ -21,12 +22,13 @@ class Sign(Enum):
     def number(self) -> int:
         return 1 if self == Sign.POSITIVE else -1
     
-    def from_number(number) -> 'Sign':
+    @classmethod
+    def from_number(cls, number) -> 'Sign':
         return Sign.POSITIVE if number >= 0 else Sign.NEGATIVE
 
+@dataclass(frozen=True)
 class Expression(ABC):
-    def __init__(self, sign: Sign = Sign.POSITIVE):
-        self.sign = sign
+    sign: Sign = Sign.POSITIVE
 
     def __add__(self, other: 'Expression') -> 'Addition':
         return Addition(self, other)
@@ -57,11 +59,9 @@ class Expression(ABC):
     def __hash__(self) -> int:
         return hash(self.sign)
 
-
+@dataclass(frozen=True)
 class Symbol(Expression):
-    def __init__(self, name: str, sign: Sign = Sign.POSITIVE):
-        self.name = name
-        self.sign = sign
+    name: str
 
     def __repr__(self):
         return f'{self.sign}{self.name}'
@@ -84,11 +84,10 @@ class Symbol(Expression):
 
     def copy(self):
         return Symbol(self.name, self.sign)
-    
+
+@dataclass(frozen=True)
 class Integer(Expression):
-    def __init__(self, number: int, sign: Sign = Sign.POSITIVE):
-        self.number = number
-        self.sign = sign
+    number: int
 
     def __repr__(self):
         return f'{self.sign}{self.number}'
@@ -120,7 +119,11 @@ class Integer(Expression):
     def __hash__(self) -> int:
         return hash((self.number, self.sign))
 
+@dataclass(frozen=True, init=False)
 class Addition(Expression):
+    lhs: Expression
+    rhs: Expression
+    
     def __init__(self, lhs: Expression, rhs: Expression, sign: Sign = Sign.POSITIVE):
         super().__init__(sign)
         self.lhs = lhs
@@ -158,7 +161,7 @@ class Addition(Expression):
     def __hash__(self) -> int:
         return hash((self.lhs, self.rhs, self.sign))
 
-    
+@dataclass(frozen=True)
 class Multiplication(Expression):
     def __init__(self, lhs: Expression, rhs: Expression, sign: Sign = Sign.POSITIVE):
         super().__init__(sign * lhs.sign * rhs.sign)
@@ -238,6 +241,7 @@ class Multiplication(Expression):
     def __hash__(self) -> int:
         return hash((self.lhs, self.rhs, self.sign))
 
+@dataclass(frozen=True)
 class Ket(Expression):
     def __init__(self, state: Union[None, Tuple[Symbol], List[Symbol], Dict[Symbol, int]] = None, sign=Sign.POSITIVE):
         super().__init__(sign)
@@ -271,6 +275,7 @@ class Ket(Expression):
     def __hash__(self) -> int:
         return hash((self.sign, *self.state))
 
+@dataclass(frozen=True)
 class Bra(Expression):
     def __init__(self, state: Union[None, Tuple[Symbol], List[Symbol], Dict[Symbol, int]] = None, sign=Sign.POSITIVE):
         super().__init__(sign)
@@ -315,6 +320,7 @@ class Bra(Expression):
     def __hash__(self) -> int:
         return hash((self.sign, *self.state))
 
+@dataclass(frozen=True)
 class FermionKet(Ket):
     def __init__(self, *state: List[Symbol], sign=Sign.POSITIVE):
         ordered, order_sign = FermionKet._order(state)
